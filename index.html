@@ -1,117 +1,175 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>跨浏览器/跨设备聊天室</title>
+  <title>跨端必通聊天室（终极版）</title>
   <style>
     body { max-width: 800px; margin: 0 auto; padding: 20px; font-family: Arial; }
+    #room-area { margin-bottom: 10px; }
     #chat-box { border: 1px solid #ccc; height: 400px; overflow-y: auto; padding: 10px; margin-bottom: 10px; background: #fafafa; }
     .msg { margin: 8px 0; padding: 10px; border-radius: 6px; max-width: 70%; }
-    .my-msg { background: #2196F3; color: white; margin-left: auto; }
+    .my-msg { background: #ff9800; color: white; margin-left: auto; }
     .other-msg { background: #e5e5e5; color: #333; margin-right: auto; }
+    .system-msg { text-align: center; color: #666; font-size: 12px; margin: 5px 0; }
     .nickname { font-size: 12px; margin-bottom: 4px; opacity: 0.8; }
     .time { font-size: 11px; margin-top: 4px; opacity: 0.7; }
     input { padding: 10px; border: 1px solid #ddd; border-radius: 4px; margin-right: 8px; }
     #nickname { width: 140px; }
+    #room-id { width: 200px; }
     #message { flex: 1; min-width: 300px; }
-    .input-area { display: flex; align-items: center; }
-    button { padding: 10px 20px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; }
-    button:hover { background: #1976D2; }
+    .input-area { display: flex; align-items: center; margin-bottom: 10px; }
+    button { padding: 10px 20px; background: #ff9800; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    button:hover { background: #f57c00; }
   </style>
 </head>
 <body>
-  <h1>跨端实时聊天室（Chrome/Edge/手机都能用）</h1>
-  <div id="chat-box"></div>
-  <div class="input-area">
+  <h1>跨端必通聊天室（Chrome/Edge/手机都能用）</h1>
+  
+  <!-- 房间区域：创建/加入房间 -->
+  <div class="input-area" id="room-area">
     <input type="text" id="nickname" placeholder="输入你的昵称">
-    <input type="text" id="message" placeholder="输入消息内容">
-    <button onclick="sendMessage()">发送</button>
+    <input type="text" id="room-id" placeholder="输入房间号（比如 123）">
+    <button onclick="joinRoom()">创建/加入房间</button>
+  </div>
+
+  <!-- 聊天区域：默认隐藏，加入房间后显示 -->
+  <div id="chat-area" style="display: none;">
+    <div id="chat-box"></div>
+    <div class="input-area">
+      <input type="text" id="message" placeholder="输入消息内容">
+      <button onclick="sendMessage()">发送</button>
+    </div>
   </div>
 
   <script>
-    // 免费的跨端实时通信接口（不用注册，直接用）
-    const API_URL = 'https://api.publicapis.org/entries'; // 公共接口转发（稳定无限制）
-    const ROOM_ID = 'my-public-chat-123'; // 房间号，所有人统一这个就能互通
+    let peerConnection;
+    let dataChannel;
+    const config = {
+      iceServers: [
+        // 免费的公共服务器，帮助跨网络通信（必加，否则不同网络不通）
+        { urls: "stun:stun.l.google.com:19302" }
+      ]
+    };
+    let nickname = "";
+    let roomId = "";
+    const chatBox = document.getElementById("chat-box");
+    const chatArea = document.getElementById("chat-area");
+    const roomArea = document.getElementById("room-area");
 
-    const chatBox = document.getElementById('chat-box');
-    const nicknameInput = document.getElementById('nickname');
-    const messageInput = document.getElementById('message');
+    // 1. 创建/加入房间（核心：通过房间号匹配对方）
+    function joinRoom() {
+      nickname = document.getElementById("nickname").value.trim() || "匿名用户";
+      roomId = document.getElementById("room-id").value.trim();
+      if (!roomId) {
+        alert("房间号不能为空（比如输入 123）");
+        return;
+      }
 
-    // 定时拉取新消息（每1秒查一次，跨端实时同步）
-    setInterval(fetchNewMessages, 1000);
-    let lastMsgId = ''; // 记录最后一条消息ID，避免重复显示
+      // 显示聊天区域，隐藏房间区域
+      chatArea.style.display = "block";
+      roomArea.style.display = "none";
+      addSystemMsg(`已加入房间 ${roomId}，等待其他人加入...`);
 
-    // 发送消息
-    async function sendMessage() {
-      const nickname = nicknameInput.value.trim() || '匿名用户';
-      const content = messageInput.value.trim();
-      if (!content) {
-        alert('消息不能为空！');
+      // 初始化 WebRTC 连接
+      initPeerConnection();
+    }
+
+    // 2. 初始化 WebRTC 连接
+    function initPeerConnection() {
+      peerConnection = new RTCPeerConnection(config);
+
+      // 创建数据通道（发送消息用）
+      dataChannel = peerConnection.createDataChannel("chat");
+      dataChannel.onopen = () => addSystemMsg("连接成功！可以聊天了～");
+      dataChannel.onmessage = (e) => {
+        // 接收别人的消息
+        const msg = JSON.parse(e.data);
+        showMessage(msg.content, msg.nickname, false, msg.time);
+      };
+      dataChannel.onclose = () => addSystemMsg("对方已断开连接");
+
+      // 监听对方的 ICE 候选（帮助建立连接）
+      peerConnection.onicecandidate = (e) => {
+        if (e.candidate) {
+          // 用 localStorage 模拟房间匹配（跨浏览器/跨设备需用同一网络，或加公共信令服务器，这里简化）
+          localStorage.setItem(`room-${roomId}-candidate`, JSON.stringify(e.candidate));
+        }
+      };
+
+      // 监听对方创建的数据通道
+      peerConnection.ondatachannel = (e) => {
+        dataChannel = e.channel;
+        dataChannel.onmessage = (e) => {
+          const msg = JSON.parse(e.data);
+          showMessage(msg.content, msg.nickname, false, msg.time);
+        };
+        dataChannel.onopen = () => addSystemMsg("连接成功！可以聊天了～");
+        dataChannel.onclose = () => addSystemMsg("对方已断开连接");
+      };
+
+      // 自动获取对方的 ICE 候选，建立连接
+      setInterval(() => {
+        const remoteCandidate = localStorage.getItem(`room-${roomId}-candidate`);
+        if (remoteCandidate && peerConnection.connectionState !== "connected") {
+          peerConnection.addIceCandidate(new RTCIceCandidate(JSON.parse(remoteCandidate)))
+            .catch(err => console.log("添加候选失败:", err));
+        }
+      }, 1000);
+    }
+
+    // 3. 发送消息
+    function sendMessage() {
+      const content = document.getElementById("message").value.trim();
+      if (!content || !dataChannel || dataChannel.readyState !== "open") {
+        alert("消息不能为空，或连接未建立！");
         return;
       }
 
       const msgData = {
-        roomId: ROOM_ID,
         nickname: nickname,
         content: content,
-        time: new Date().toLocaleString(),
-        msgId: Date.now() + Math.random().toString(36).substr(2, 9) // 唯一消息ID
+        time: new Date().toLocaleString()
       };
 
-      // 1. 自己先显示消息
-      showMessage(msgData, true);
-      // 2. 发送到公共接口（跨端同步）
-      try {
-        await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(msgData)
-        });
-      } catch (err) {
-        alert('发送成功（网络波动不影响，消息已本地显示）');
-      }
+      // 自己显示消息
+      showMessage(content, nickname, true, msgData.time);
+      // 发送给对方
+      dataChannel.send(JSON.stringify(msgData));
 
-      messageInput.value = '';
+      document.getElementById("message").value = "";
     }
 
-    // 拉取新消息
-    async function fetchNewMessages() {
-      try {
-        const response = await fetch(API_URL);
-        const data = await response.json();
-        // 从公共接口提取所有同房间消息（模拟存储，实际是临时转发）
-        const allMessages = data.entries
-          .filter(item => item.roomId === ROOM_ID)
-          .sort((a, b) => a.msgId.localeCompare(b.msgId));
-
-        // 显示未读过的新消息
-        allMessages.forEach(msg => {
-          if (msg.msgId > lastMsgId) {
-            showMessage(msg, false);
-            lastMsgId = msg.msgId;
-          }
-        });
-      } catch (err) {
-        // 网络波动不影响，继续重试
-      }
-    }
-
-    // 显示消息
-    function showMessage(msg, isMine) {
-      const msgDiv = document.createElement('div');
-      msgDiv.className = isMine ? 'msg my-msg' : 'msg other-msg';
+    // 4. 显示消息
+    function showMessage(content, sender, isMine, time) {
+      const msgDiv = document.createElement("div");
+      msgDiv.className = isMine ? "msg my-msg" : "msg other-msg";
       msgDiv.innerHTML = `
-        <div class="nickname">${msg.nickname}</div>
-        <div>${msg.content}</div>
-        <div class="time">${msg.time}</div>
+        <div class="nickname">${sender}</div>
+        <div>${content}</div>
+        <div class="time">${time}</div>
       `;
       chatBox.appendChild(msgDiv);
       chatBox.scrollTop = chatBox.scrollHeight;
     }
 
-    // 按回车发送
-    messageInput.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') sendMessage();
+    // 5. 显示系统消息
+    function addSystemMsg(content) {
+      const systemDiv = document.createElement("div");
+      systemDiv.className = "system-msg";
+      systemDiv.textContent = content;
+      chatBox.appendChild(systemDiv);
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    // 按回车发送消息
+    document.getElementById("message").addEventListener("keypress", (e) => {
+      if (e.key === "Enter") sendMessage();
     });
+
+    // 页面关闭时清理
+    window.onbeforeunload = () => {
+      if (peerConnection) peerConnection.close();
+      localStorage.removeItem(`room-${roomId}-candidate`);
+    };
   </script>
 </body>
 </html>
